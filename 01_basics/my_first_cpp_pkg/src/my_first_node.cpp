@@ -1,16 +1,35 @@
 #include "rclcpp/rclcpp.hpp"
 
+/**
+ * @brief Entry point for the first ROS 2 C++ node.
+ *
+ * This program demonstrates the basic lifecycle of a ROS 2 node:
+ * 1. Initialize ROS 2
+ * 2. Create a node
+ * 3. Log a message
+ * 4. Keep the node alive
+ * 5. Shut down ROS 2
+ */
 int main(int argc, char * argv[])
 {
-    rclcpp::init(argc, argv);
+  // Initialize the ROS 2 communication system.
+  rclcpp::init(argc, argv);
 
-    auto node = rclcpp::Node::make_shared("my_first_node");
+  // Create a ROS 2 node named "my_first_node".
+  auto node = rclcpp::Node::make_shared("my_first_node");
 
-    RCLCPP_INFO(node->get_logger(), "Hello ROS 2!");
+  // Print an informational message using the node's logger.
+  RCLCPP_INFO(
+    node->get_logger(),
+    "Hello ROS 2!"
+  );
 
-    rclcpp::spin(node);
+  // Keep the node alive and allow ROS 2 to process events.
+  rclcpp::spin(node);
 
-    rclcpp::shutdown();
+  // Shut down ROS 2 cleanly.
+  rclcpp::shutdown();
 
-    return 0;
+  return 0;
 }
+
