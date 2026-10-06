@@ -1,59 +1,90 @@
-ROS 2 Nodes --- C++ Learning Chapter
+# ROS 2 Nodes — C++ Learning Chapter
 
-This chapter covers the fundamentals of creating and controlling a ROS 2
-node using C++ and rclcpp.
+This chapter covers the fundamentals of creating and controlling a ROS 2 node in C++ with `rclcpp`.
 
-The implementation progresses from a basic node to a class-based node
-with a timer and runtime-configurable parameters.
+The implementation grows from a minimal node into a **class-based node with a timer and runtime-configurable parameters**.
 
-Learning Objectives
+> **Environment:** ROS 2 (Humble or newer), C++17, `colcon`. Commands assume a `zsh` shell; use `setup.bash` if you use bash.
 
-By completing this chapter, you should understand:
+---
 
-How a ROS 2 node is created in C++
+## Learning Objectives
 
-How rclcpp::Node is used
+By the end of this chapter you should be able to:
 
-Why class-based ROS 2 nodes are useful
+- [ ] Create a ROS 2 node in C++
+- [ ] Explain how `rclcpp::Node` is used
+- [ ] Explain why class-based nodes are useful
+- [ ] Explain how `rclcpp::spin()` keeps a node alive
+- [ ] Create and own a ROS 2 timer
+- [ ] Declare and read parameters
+- [ ] Change parameters at runtime
+- [ ] Validate parameter values
+- [ ] Recreate a timer when its period changes
+- [ ] Inspect a node and its parameters from the ROS 2 CLI
 
-How rclcpp::spin() keeps a node alive
+---
 
-How ROS 2 timers work
+## Package Structure
 
-How to declare and read parameters
-
-How to change parameters at runtime
-
-How to validate parameter values
-
-How to recreate a timer when its period changes
-
-How to inspect a node and its parameters from the ROS 2 CLI
-
-Package Structure
-
+```text
 02_nodes/
 └── node_demo_pkg/
     ├── CMakeLists.txt
     ├── package.xml
     └── src/
         └── node_demo.cpp
+```
 
-The package is linked into the ROS 2 workspace using a symbolic link:
+The package is linked into the ROS 2 workspace with a symbolic link:
 
-ros2-cpp-learning/02_nodes/node_demo_pkg
-                │
-                └── symlink
-                        ↓
-                ros2_ws/src/node_demo_pkg
+```text
+ros2-cpp-learning/02_nodes/node_demo_pkg      (Git repository)
+        │
+        └── symlink ──▶  ~/ros2_ws/src/node_demo_pkg
+```
 
-The GitHub repository is the source of truth. The ROS 2 workspace
-provides the build environment.
+The GitHub repository is the **source of truth**; the workspace only provides the build environment.
 
-1. Creating a ROS 2 Node
+### `package.xml` (essentials)
 
-The node inherits from rclcpp::Node:
+```xml
+<buildtool_depend>ament_cmake</buildtool_depend>
+<depend>rclcpp</depend>
 
+<test_depend>ament_lint_auto</test_depend>
+<test_depend>ament_lint_common</test_depend>
+```
+
+### `CMakeLists.txt` (essentials)
+
+```cmake
+cmake_minimum_required(VERSION 3.8)
+project(node_demo_pkg)
+
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+
+add_executable(node_demo src/node_demo.cpp)
+ament_target_dependencies(node_demo rclcpp)
+
+install(TARGETS node_demo DESTINATION lib/${PROJECT_NAME})
+
+if(BUILD_TESTING)
+  find_package(ament_lint_auto REQUIRED)
+  ament_lint_auto_find_test_dependencies()
+endif()
+
+ament_package()
+```
+
+---
+
+## 1. Creating a ROS 2 Node
+
+A class-based node inherits from `rclcpp::Node`:
+
+```cpp
 class NodeDemo : public rclcpp::Node
 {
 public:
@@ -62,177 +93,181 @@ public:
   {
   }
 };
+```
 
-This gives the class access to ROS 2 node functionality such as:
+Inheriting gives the class direct access to core ROS 2 functionality:
 
-publishers
+| Capability  | Example                   |
+|-------------|---------------------------|
+| Publishers  | `create_publisher<T>()`   |
+| Subscribers | `create_subscription<T>()`|
+| Timers      | `create_wall_timer()`     |
+| Parameters  | `declare_parameter<T>()`  |
+| Services    | `create_service<T>()`     |
+| Actions     | via `rclcpp_action`       |
+| Logging     | `get_logger()`            |
 
-subscribers
+The constructor argument `Node("node_demo")` sets the node name, which appears in ROS 2 as `/node_demo`.
 
-timers
+**Why class-based nodes?** State (the timer, parameter values, publishers) lives together with the callbacks that use it, so there are no globals and the node is easy to extend and test.
 
-parameters
+---
 
-services
+## 2. Initializing and Running ROS 2
 
-actions
+Every ROS 2 C++ executable follows the same pattern:
 
-logging
+```cpp
+int main(int argc, char ** argv)
+{
+  rclcpp::init(argc, argv);                    // 1. initialize ROS 2
 
-The constructor:
+  auto node = std::make_shared<NodeDemo>();    // 2. create the node
+  rclcpp::spin(node);                          // 3. process callbacks until shutdown
 
-Node("node_demo")
+  rclcpp::shutdown();                          // 4. clean up
+  return 0;
+}
+```
 
-sets the ROS 2 node name to:
-
-/node_demo
-
-2. Initializing ROS 2
-
-Every normal ROS 2 C++ executable starts by initializing ROS 2:
-
-rclcpp::init(argc, argv);
-
-The node is then created:
-
-auto node = std::make_shared<NodeDemo>();
-
-and passed to the ROS 2 executor:
-
-rclcpp::spin(node);
-
-Finally, ROS 2 is shut down:
-
-rclcpp::shutdown();
-
-The basic lifecycle is:
-
+```text
 rclcpp::init()
       ↓
-Create node
+Create node (std::make_shared)
       ↓
-rclcpp::spin()
+rclcpp::spin()   ← blocks; executor runs timers, parameter events, etc.
       ↓
-Process callbacks/events
+Ctrl+C / shutdown signal
       ↓
 rclcpp::shutdown()
+```
 
-3. ROS 2 Logging
+`rclcpp::spin()` creates a single-threaded executor that waits for events and runs the matching callbacks. Without it, `main()` would return immediately and the timer would never fire.
 
-The node uses the ROS 2 logging system:
+---
 
-RCLCPP_INFO(
-  this->get_logger(),
-  "Node has started!"
-);
+## 3. Logging
 
-The logger belongs to the node and produces output similar to:
+```cpp
+RCLCPP_INFO(this->get_logger(), "Node has started!");
+```
 
-[INFO] [node_demo]: Node has started!
+Output:
 
-Logging is preferable to using std::cout for normal ROS 2 node
-diagnostics because it integrates with the ROS 2 logging system.
+```text
+[INFO] [1700000000.123456789] [node_demo]: Node has started!
+```
 
-4. Timers
+Prefer ROS 2 logging over `std::cout`: it carries the node name and a timestamp, supports severity levels (`DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`), can be filtered at runtime, and is published on `/rosout`.
 
-A ROS 2 timer allows a callback to execute periodically.
+---
 
-The timer is created with:
+## 4. Timers
 
+A wall timer runs a callback periodically.
+
+```cpp
 timer_ = this->create_wall_timer(
-  timer_duration,
-  std::bind(&NodeDemo::timer_callback, this)
-);
+  std::chrono::duration<double>(timer_period_),
+  std::bind(&NodeDemo::timer_callback, this));
+```
 
-The callback is:
+The callback:
 
+```cpp
 void timer_callback()
 {
   RCLCPP_INFO(
     this->get_logger(),
     "Timer callback executed! Period: %.2f s",
-    timer_period_
-  );
+    timer_period_);
 }
+```
 
-The timer is stored as:
+The timer is stored as a class member:
 
+```cpp
 rclcpp::TimerBase::SharedPtr timer_;
+```
 
-Why store the timer?
+**Why store the timer?** A timer only exists while something owns it. If the `SharedPtr` were a local variable, the timer would be destroyed when the constructor returned and the callback would never run. Making it a member ties its lifetime to the node.
 
-The timer object must remain alive while the node is running. Making it
-a class member keeps ownership of the timer.
+---
 
-5. ROS 2 Parameters
+## 5. Parameters
 
-The timer period is configurable through a ROS 2 parameter:
+The timer period is configurable through a parameter:
 
+```cpp
 this->declare_parameter<double>("timer_period", 1.0);
+```
 
-This declares:
+| Property      | Value          |
+|---------------|----------------|
+| Name          | `timer_period` |
+| Type          | `double`       |
+| Default value | `1.0`          |
 
-timer_period
+Read the initial value:
 
-with a default value of:
+```cpp
+timer_period_ = this->get_parameter("timer_period").as_double();
+```
 
-1.0
+Inspect it from another terminal:
 
-and type:
-
-double
-
-The initial value is read with:
-
-timer_period_ =
-  this->get_parameter("timer_period").as_double();
-
-The parameter can be inspected from another terminal:
-
+```bash
 ros2 param get /node_demo timer_period
+```
 
-6. Dynamic Parameter Updates
+---
 
-The important feature in this chapter is that the timer period can be
-changed while the node is running.
+## 6. Dynamic Parameter Updates
 
-A parameter callback is registered:
+The key feature of this chapter: **the timer period can change while the node is running.**
 
+Register a parameter callback:
+
+```cpp
 parameter_callback_handle_ =
   this->add_on_set_parameters_callback(
-  std::bind(
-    &NodeDemo::parameter_callback,
-    this,
-    std::placeholders::_1
-  ));
+    std::bind(
+      &NodeDemo::parameter_callback,
+      this,
+      std::placeholders::_1));
+```
 
-The callback receives the parameters being changed.
+Store the handle as a member. If it is destroyed, the callback is unregistered:
 
+```cpp
+rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr
+  parameter_callback_handle_;
+```
+
+The callback receives the parameters that are about to be set:
+
+```cpp
 rcl_interfaces::msg::SetParametersResult parameter_callback(
   const std::vector<rclcpp::Parameter> & parameters)
+```
 
-When timer_period changes, the node:
+When `timer_period` changes, the node:
 
-Reads the new value
+1. Reads the new value
+2. Validates it
+3. Stores it
+4. Cancels the old timer
+5. Creates a new timer with the new period
 
-Validates it
-
-Stores it
-
-Cancels the old timer
-
-Creates a new timer using the new period
-
-Conceptually:
-
+```text
 ros2 param set
        │
        ▼
 Parameter callback
        │
        ▼
-Validate value
-       │
+Validate value ──── invalid ──▶ result.successful = false (change rejected)
+       │ valid
        ▼
 Update timer_period_
        │
@@ -244,163 +279,317 @@ Create new timer
        │
        ▼
 New callback frequency
+```
 
-7. Parameter Validation
+---
 
-The node prevents invalid timer periods:
+## 7. Parameter Validation
 
+Reject invalid values before they affect runtime behavior:
+
+```cpp
 if (new_period <= 0.0) {
   result.successful = false;
   result.reason = "timer_period must be greater than 0";
   return result;
 }
+```
 
-Therefore:
+So both of these are rejected:
 
-ros2 param set /node_demo timer_period 0
-
-is rejected.
-
-Negative values are also rejected:
-
+```bash
+ros2 param set /node_demo timer_period 0.0
 ros2 param set /node_demo timer_period -1.0
+```
 
-This demonstrates an important robotics software principle:
+> **Principle:** Validate configuration *before* allowing it to change runtime behavior.
 
-Validate configuration before allowing it to affect runtime behavior.
+---
 
-8. Parameter Types
+## 8. Parameter Types
 
-ROS 2 parameters are strongly typed.
+ROS 2 parameters are **strongly typed**. `timer_period` was declared as `double`, so it must be set with a floating-point value:
 
-The parameter was declared as:
+```bash
+ros2 param set /node_demo timer_period 2.0   # OK
+ros2 param set /node_demo timer_period 1     # FAILS: 1 is parsed as an integer
+```
 
-this->declare_parameter<double>("timer_period", 1.0);
+The second command is rejected with a type-mismatch error. Always include a decimal point (`1.0`, `0.0`) for `double` parameters.
 
-Therefore, use a floating-point value when changing it:
+> **Note:** This also applies to the invalid-value test. Use `0.0`, not `0`. With `0` you would see a *type* error and never reach your validation code.
 
-ros2 param set /node_demo timer_period 2.0
+---
 
-This works.
+## 9. Complete Source
 
-But:
+```cpp
+#include <chrono>
+#include <functional>
+#include <memory>
+#include <vector>
 
-ros2 param set /node_demo timer_period 1
+#include "rclcpp/rclcpp.hpp"
+#include "rcl_interfaces/msg/set_parameters_result.hpp"
 
-can fail because 1 is interpreted as an integer while the parameter
-expects a double.
+class NodeDemo : public rclcpp::Node
+{
+public:
+  NodeDemo()
+  : Node("node_demo")
+  {
+    RCLCPP_INFO(this->get_logger(), "Node has started!");
 
-Use:
+    this->declare_parameter<double>("timer_period", 1.0);
+    timer_period_ = this->get_parameter("timer_period").as_double();
 
-ros2 param set /node_demo timer_period 1.0
+    parameter_callback_handle_ =
+      this->add_on_set_parameters_callback(
+        std::bind(
+          &NodeDemo::parameter_callback,
+          this,
+          std::placeholders::_1));
 
-instead.
+    create_timer();
+  }
 
-9. Testing Dynamic Behavior
+private:
+  void create_timer()
+  {
+    if (timer_) {
+      timer_->cancel();
+    }
+    timer_ = this->create_wall_timer(
+      std::chrono::duration<double>(timer_period_),
+      std::bind(&NodeDemo::timer_callback, this));
+  }
 
-Start the node:
+  void timer_callback()
+  {
+    RCLCPP_INFO(
+      this->get_logger(),
+      "Timer callback executed! Period: %.2f s",
+      timer_period_);
+  }
 
-ros2 run node_demo_pkg node_demo
+  rcl_interfaces::msg::SetParametersResult parameter_callback(
+    const std::vector<rclcpp::Parameter> & parameters)
+  {
+    rcl_interfaces::msg::SetParametersResult result;
+    result.successful = true;
 
-The default period is one second.
+    for (const auto & parameter : parameters) {
+      if (parameter.get_name() != "timer_period") {
+        continue;
+      }
 
-Change it to two seconds:
+      const double new_period = parameter.as_double();
 
-ros2 param set /node_demo timer_period 2.0
+      if (new_period <= 0.0) {
+        result.successful = false;
+        result.reason = "timer_period must be greater than 0";
+        return result;
+      }
 
-Change it to half a second:
+      timer_period_ = new_period;
+      create_timer();
 
-ros2 param set /node_demo timer_period 0.5
+      RCLCPP_INFO(
+        this->get_logger(),
+        "timer_period changed to %.2f s", timer_period_);
+    }
 
-Try an invalid value:
+    return result;
+  }
 
-ros2 param set /node_demo timer_period 0
+  double timer_period_{1.0};
+  rclcpp::TimerBase::SharedPtr timer_;
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr
+    parameter_callback_handle_;
+};
 
-Expected result:
+int main(int argc, char ** argv)
+{
+  rclcpp::init(argc, argv);
+  rclcpp::spin(std::make_shared<NodeDemo>());
+  rclcpp::shutdown();
+  return 0;
+}
+```
 
-Set parameter failed: timer_period must be greater than 0
+---
 
-10. Important ROS 2 Mental Model
+## 10. Build and Run
 
-This chapter demonstrates several core ROS 2 concepts:
+Build:
 
-                    ROS 2 Node
-                        │
-        ┌───────────────┼────────────────┐
-        │               │                │
-     Parameter         Timer           Logger
-        │               │                │
-        ▼               ▼                ▼
- timer_period      callback()       RCLCPP_INFO
-        │
-        ▼
- Runtime configuration
-
-The node itself is the main execution unit.
-
-Timers and parameter callbacks are event sources processed by the ROS 2
-executor.
-
-11. Build and Test
-
-Build the package:
-
+```bash
 cd ~/ros2_ws
 
 CC=gcc-14 CXX=g++-14 colcon build \
   --packages-select node_demo_pkg
+```
 
 Source the workspace:
 
+```bash
 source install/setup.zsh
+```
 
-Run tests:
+Run the node:
 
+```bash
+ros2 run node_demo_pkg node_demo
+```
+
+---
+
+## 11. Testing Dynamic Behavior
+
+With the node running, use a second terminal (sourced as above).
+
+| Goal                  | Command                                          | Expected result                                 |
+|-----------------------|--------------------------------------------------|-------------------------------------------------|
+| Default behavior      | *(none)*                                         | Callback fires every 1 s                        |
+| Slow down             | `ros2 param set /node_demo timer_period 2.0`     | `Set parameter successful`, callback every 2 s  |
+| Speed up              | `ros2 param set /node_demo timer_period 0.5`     | Callback every 0.5 s                            |
+| Invalid value         | `ros2 param set /node_demo timer_period 0.0`     | Rejected: `timer_period must be greater than 0`  |
+| Wrong type            | `ros2 param set /node_demo timer_period 1`       | Rejected: type mismatch                         |
+
+The exact wording of CLI messages can differ slightly between ROS 2 distributions.
+
+---
+
+## 12. Inspecting the Node from the CLI
+
+```bash
+ros2 node list                                   # running nodes
+ros2 node info /node_demo                        # topics, services, actions, parameters
+ros2 param list /node_demo                       # all parameters
+ros2 param get /node_demo timer_period           # current value
+ros2 param describe /node_demo timer_period      # type, constraints, description
+ros2 param dump /node_demo                       # export parameters as YAML
+```
+
+You can also set the parameter at startup instead of at runtime:
+
+```bash
+ros2 run node_demo_pkg node_demo --ros-args -p timer_period:=0.25
+```
+
+---
+
+## 13. Automated Tests
+
+```bash
+cd ~/ros2_ws
 colcon test --packages-select node_demo_pkg
-
-View detailed results:
-
 colcon test-result --verbose
+```
 
 Expected result:
 
+```text
 Summary: 8 tests, 0 errors, 0 failures, 1 skipped
+```
 
-What I Learned
+These tests come from `ament_lint_auto` (code style, copyright, static analysis, and so on). They check code quality, not node behavior. A natural next step is to add a `gtest` that verifies the parameter validation logic.
 
-After completing this chapter, I can:
+---
 
-Create a ROS 2 C++ node
+## 14. Mental Model
 
-Use rclcpp
+```text
+                    ROS 2 Node
+                        │
+        ┌───────────────┼────────────────┐
+        │               │                │
+    Parameter         Timer           Logger
+        │               │                │
+        ▼               ▼                ▼
+  timer_period      callback()       RCLCPP_INFO
+        │
+        ▼
+ Runtime configuration
+```
 
-Build class-based nodes
+- The **node** is the main unit of execution and ownership.
+- **Timers** and **parameter callbacks** are event sources.
+- The **executor** (driven by `rclcpp::spin()`) waits for events and runs their callbacks.
+- With the default single-threaded executor, callbacks never run at the same time, so `timer_period_` needs no mutex here. With a multi-threaded executor you would need to protect it.
 
-Create periodic timers
+---
 
-Use ROS 2 parameters
+## 15. Common Pitfalls
 
-Inspect parameters from the CLI
+| Pitfall | Symptom | Fix |
+|---------|---------|-----|
+| Timer stored in a local variable | Callback never runs | Keep it as a class member |
+| Forgot `rclcpp::spin()` | Node exits immediately | Spin the node in `main()` |
+| Integer value for a `double` parameter | Type-mismatch error | Use `1.0`, not `1` |
+| Parameter callback handle not stored | Callback silently stops working | Keep the handle as a member |
+| Not checking `parameter.get_name()` | Wrong logic runs when other parameters are added | Filter by name in the callback |
+| `ros2 run` can't find the executable | `No executable found` | Rebuild and re-source `install/setup.zsh` |
 
-Modify parameters at runtime
+### Design note
 
-Validate parameter values
+`add_on_set_parameters_callback` runs **before** the value is committed. If a single `set` request contains several parameters and a later one is rejected, the timer may already have been recreated for an update that was ultimately rolled back. For this simple node that is acceptable. Newer distributions provide `add_post_set_parameters_callback`, which is a better place to apply side effects after validation has succeeded.
 
-Dynamically recreate a timer
+Also note that the callback is registered *after* `declare_parameter`, so an initial value supplied at launch (for example `-p timer_period:=0.0`) is not validated by it. Registering the callback before declaring the parameter closes that gap.
 
-Build and test a ROS 2 package with colcon
+---
 
-Next Chapter
+## Exercises
 
-The next chapter introduces ROS 2 Services.
+1. Add a second parameter, `message`, and print it from the timer callback.
+2. Add a `ParameterDescriptor` with a `FloatingPointRange` (for example 0.01 to 10.0) and observe how ROS 2 enforces it.
+3. Move the validation logic into a free function and unit-test it with `gtest`.
+4. Replace the parameter callback with `add_post_set_parameters_callback` (if your distro supports it).
+5. Load `timer_period` from a YAML file via `--params-file`.
 
-The communication model changes from:
+---
 
-Publisher → Topic → Subscriber
+## Quick Reference
 
-to:
+| Task                      | API / command                                  |
+|---------------------------|------------------------------------------------|
+| Initialize ROS 2          | `rclcpp::init(argc, argv)`                     |
+| Keep node alive           | `rclcpp::spin(node)`                           |
+| Shut down                 | `rclcpp::shutdown()`                           |
+| Log a message             | `RCLCPP_INFO(get_logger(), "...")`             |
+| Periodic callback         | `create_wall_timer(period, callback)`          |
+| Declare a parameter       | `declare_parameter<T>(name, default)`          |
+| Read a parameter          | `get_parameter(name).as_double()`              |
+| Validate changes          | `add_on_set_parameters_callback(cb)`           |
+| Set a parameter (CLI)     | `ros2 param set /node name value`              |
 
-Client → Request → Service Server
-Client ← Response ← Service Server
+---
 
-This will introduce request/response communication in ROS 2.
+## What I Learned
+
+- [x] Create a ROS 2 C++ node with `rclcpp`
+- [x] Build class-based nodes
+- [x] Create and own periodic timers
+- [x] Declare and read ROS 2 parameters
+- [x] Inspect parameters from the CLI
+- [x] Modify parameters at runtime
+- [x] Validate parameter values and respect parameter types
+- [x] Dynamically recreate a timer
+- [x] Build and test a package with `colcon`
+
+---
+
+## Next Chapter
+
+**ROS 2 Services** — the communication model changes from publish/subscribe:
+
+```text
+Publisher ──▶ Topic ──▶ Subscriber
+```
+
+to request/response:
+
+```text
+Client ──▶ Request  ──▶ Service Server
+Client ◀── Response ◀── Service Server
+```
